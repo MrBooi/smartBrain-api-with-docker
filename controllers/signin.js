@@ -1,4 +1,9 @@
-const handleSignin = (db, bcryp ,req, res) => {
+const jwt = require('jsonwebtoken'); 
+const redis = require("redis");
+// redis setup
+    redisClient = redis.createClient(process.env.Redis_URI);
+
+const handleSignin = (db, bcrypt ,req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return Promise.reject('incorrect form submission');
@@ -19,17 +24,53 @@ return  db.select('email', 'hash').from('login')
     .catch(err => Promise.reject('wrong credentials'))
 }
 
-const getAuthTokenId =()=>{
+const getAuthTokenId =(req,res)=>{
+  const { authorization } =req.headers;
+ return redisClient.get(authorization,(err,reply)=>{
+    if (err || !reply) {
+      return res.status(400),json("Unauthorized");
+    }
+  return res.json({id:reply});
+  })
+} 
 
+const siginToken=(email)=> {
+  // Data that am sending with token
+  const jwtPayload ={email};
+ // JWT TOKEN
+ return jwt.sign(jwtPayload, 'JWT_SECRET',{expiresIn:'2 days'});
 }
-const signinAuthentication =(db,bcrypt)=>(req,res)=>{
- const { authorization } =req.headers;
- return authorization ? getAuthTokenId() : 
- handleSignin(db, bcryp ,req, res)
- .then(data=> res.json(data))
- .catch(err=>res.status(400).json(err));
+
+const setToken= (key,value)=>{
+  // TOKEN INTO  REDIS DATABASE AND KEY IS A TOKEN STRING WHILE VALUE IS A USER ID
+ return Promise.resolve(redisClient.set(key,value));
+}
+
+
+ const createSession =(user)=> {
+   // create JWT and return user data 
+   const {email,id} = user; 
+   // token have JWT Token
+   const token = siginToken(email);  
+   return setToken(token,id)
+   .then(()=> {
+   return { success:true, userId:id,token }
+   })
+  .catch(console.log)
+ }
+
+const signinAuthentication =(db,bcrypt)=>(req,res)=>{ 
+ const { authorization } =req.headers;  
+ return authorization ? getAuthTokenId(req,res) : 
+ handleSignin(db, bcrypt ,req, res)
+ .then(data=> { 
+   // creating user session
+  return data.id && data.email ? createSession(data): Promise.reject(data)
+ }) .then(session => res.json(session))
+    .catch(err=>res.status(400).json(err));
 }
 
 module.exports = {
-  signinAuthentication: signinAuthentication
+  signinAuthentication: signinAuthentication,
+  redisClient
 }
